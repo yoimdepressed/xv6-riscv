@@ -6,6 +6,8 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "vm.h"
+extern uint read_count;
+extern struct spinlock read_count_lock;
 
 uint64
 sys_exit(void)
@@ -104,4 +106,25 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64
+sys_getreadcount(void)
+{
+  uint r_val;
+
+  acquire(&read_count_lock);
+  r_val = read_count;
+  release(&read_count_lock);
+  
+  return r_val;
+}
+
+// Add this to kernel/sysproc.c
+uint64
+sys_wait_stat(void)
+{
+  uint64 addr;
+  argaddr(0, &addr);
+  return kwait(addr);
 }

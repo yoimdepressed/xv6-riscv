@@ -16,6 +16,10 @@
 #include "file.h"
 #include "fcntl.h"
 
+struct spinlock read_count_lock;
+uint read_count = 0;
+// END OF ADDITION
+
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
 static int
@@ -65,6 +69,7 @@ sys_dup(void)
   return fd;
 }
 
+
 uint64
 sys_read(void)
 {
@@ -72,27 +77,39 @@ sys_read(void)
   int n;
   uint64 p;
 
-  argaddr(1, &p);
-  argint(2, &n);
   if(argfd(0, 0, &f) < 0)
     return -1;
-  return fileread(f, p, n);
+  argint(2, &n);
+  argaddr(1, &p);
+
+  int bytes_read = fileread(f, p, n);
+
+  if (bytes_read > 0) {
+    acquire(&read_count_lock);
+    read_count += bytes_read; // Unsigned int handles wraparound
+    release(&read_count_lock);
+  }
+
+  return bytes_read;
 }
 
+
+// Add this entire function back into kernel/sysfile.c if it's missing
 uint64
 sys_write(void)
 {
   struct file *f;
   int n;
   uint64 p;
-  
-  argaddr(1, &p);
-  argint(2, &n);
+
   if(argfd(0, 0, &f) < 0)
     return -1;
+  argint(2, &n);
+  argaddr(1, &p);
 
   return filewrite(f, p, n);
 }
+
 
 uint64
 sys_close(void)

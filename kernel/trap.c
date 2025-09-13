@@ -34,6 +34,9 @@ trapinithart(void)
 // called from, and returns to, trampoline.S
 // return value is user satp for trampoline.S to switch to.
 //
+// In kernel/trap.c
+// REPLACE YOUR ENTIRE usertrap FUNCTION WITH THIS
+
 uint64
 usertrap(void)
 {
@@ -42,58 +45,64 @@ usertrap(void)
   if((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
 
-  // send interrupts and exceptions to kerneltrap(),
-  // since we're now in the kernel.
-  w_stvec((uint64)kernelvec);  //DOC: kernelvec
+  w_stvec((uint64)kernelvec);
 
   struct proc *p = myproc();
   
-  // save user program counter.
   p->trapframe->epc = r_sepc();
   
   if(r_scause() == 8){
     // system call
-
     if(killed(p))
       kexit(-1);
-
-    // sepc points to the ecall instruction,
-    // but we want to return to the next instruction.
     p->trapframe->epc += 4;
-
-    // an interrupt will change sepc, scause, and sstatus,
-    // so enable only now that we're done with those registers.
     intr_on();
-
     syscall();
   } else if((which_dev = devintr()) != 0){
-    // ok
+    // A device interrupt occurred. Handle the timer interrupt here directly.
+    if(which_dev == 2){
+      // This is the timer interrupt.
+      if(p->state == RUNNING) {
+        // This debug print should now work.
+        // You can remove it after you confirm it prints.
+        // printf("DEBUG TRAP: Tick for PID %d, vruntime was %ld\n", p->pid, p->vruntime);
+        
+        p->run_time++;
+        
+        #if defined(SCHEDULER_CFS)
+          // Update vruntime for CFS
+          int weight = nice_to_weight[p->nice + 20];
+          p->vruntime += 1024 / weight;
+        #endif
+      }
+      // Give up the CPU.
+      #if !defined(SCHEDULER_FCFS)
+      yield();
+      #endif
+    }
+    // Other device interrupts (e.g., disk) will fall through here.
   } else if((r_scause() == 15 || r_scause() == 13) &&
             vmfault(p->pagetable, r_stval(), (r_scause() == 13)? 1 : 0) != 0) {
     // page fault on lazily-allocated page
   } else {
     printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
+    // CORRECTED LINE
+printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
     setkilled(p);
   }
 
   if(killed(p))
     kexit(-1);
 
-  // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
-    yield();
+  // NOTE: The old "if(which_dev == 2)" block that was here has been moved up
+  // into the main if-else chain. This is the critical fix.
 
   prepare_return();
 
-  // the user page table to switch to, for trampoline.S
   uint64 satp = MAKE_SATP(p->pagetable);
 
-  // return to trampoline.S; satp value in a0.
   return satp;
 }
-
-//
 // set up trapframe and control registers for a return to user space
 //
 void

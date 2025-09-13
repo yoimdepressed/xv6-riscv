@@ -29,6 +29,8 @@ main()
     fileinit();      // file table
     virtio_disk_init(); // emulated hard disk
     userinit();      // first user process
+    extern struct spinlock read_count_lock;
+    initlock(&read_count_lock, "read_count");
     __sync_synchronize();
     started = 1;
   } else {

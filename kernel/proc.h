@@ -96,6 +96,14 @@ struct proc {
   struct proc *parent;         // Parent process
 
   // these are private to the process, so p->lock need not be held.
+  uint64 creation_time;     // Time process was created (for FCFS)
+  int    nice;              // Nice value for priority (for CFS)
+  uint64 vruntime;          // Virtual runtime (for CFS)
+  
+  // Fields for performance measurement
+  uint64 run_time;          // Total time spent in RUNNING state
+  uint64 sleep_time;        // Total time spent in SLEEPING state
+  uint64 runnable_time;     // Total time spent in RUNNABLE state
   uint64 kstack;               // Virtual address of kernel stack
   uint64 sz;                   // Size of process memory (bytes)
   pagetable_t pagetable;       // User page table
@@ -104,4 +112,12 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+};
+
+// ADD this struct definition somewhere in the file
+struct pstat {
+  int pid;
+  uint64 run_time;
+  uint64 sleep_time;
+  uint64 runnable_time;
 };

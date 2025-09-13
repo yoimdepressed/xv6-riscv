@@ -183,3 +183,10 @@ void            virtio_disk_intr(void);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+
+// Add this to the end of kernel/defs.h
+
+// Scheduler declarations
+#if defined(SCHEDULER_CFS)
+extern const int nice_to_weight[40];
+#endif

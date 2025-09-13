@@ -1,6 +1,15 @@
 #define SBRK_ERROR ((char *)-1)
 
 struct stat;
+struct rtcdate;
+// ADD THE PSTAT DEFINITION HERE
+struct pstat {
+  int pid;
+  uint64 run_time;
+  uint64 sleep_time;
+  uint64 runnable_time;
+};
+// END OF AD
 
 // system calls
 int fork(void);
@@ -24,6 +33,9 @@ int getpid(void);
 char* sys_sbrk(int,int);
 int pause(int);
 int uptime(void);
+int getreadcount(void);
+// int wait(uint64);
+int wait_stat(struct pstat*);
 
 // ulib.c
 int stat(const char*, struct stat*);

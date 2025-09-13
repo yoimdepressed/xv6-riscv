@@ -60,6 +60,13 @@ OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
 
 CFLAGS = -Wall -Werror -Wno-unknown-attributes -O -fno-omit-frame-pointer -ggdb -gdwarf-2
+ifeq ($(SCHEDULER), FCFS)
+  SCHED_FLAG = -DSCHEDULER_FCFS
+endif
+ifeq ($(SCHEDULER), CFS)
+  SCHED_FLAG = -DSCHEDULER_CFS
+endif
+CFLAGS += $(SCHED_FLAG)
 CFLAGS += -MD
 CFLAGS += -mcmodel=medany
 CFLAGS += -ffreestanding
@@ -142,6 +149,9 @@ UPROGS=\
 	$U/_logstress\
 	$U/_forphan\
 	$U/_dorphan\
+	$U/_readcount\
+	$U/_schedulertest\
+	$U/_cfs_test\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

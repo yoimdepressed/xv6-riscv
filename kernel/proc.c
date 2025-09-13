@@ -6,6 +6,19 @@
 #include "proc.h"
 #include "defs.h"
 
+#if defined(SCHEDULER_CFS)
+const int nice_to_weight[40] = {
+ /* -20 */ 88761, 71755, 56483, 46273, 36291,
+ /* -15 */ 29154, 23254, 18705, 14949, 11916,
+ /* -10 */ 9548, 7620, 6100, 4904, 3906,
+ /* -5 */ 3121, 2501, 1991, 1586, 1277,
+ /* 0 */ 1024, 820, 655, 526, 423,
+ /* 5 */ 335, 272, 215, 172, 137,
+ /* 10 */ 110, 87, 70, 56, 45,
+ /* 15 */ 36, 29, 23, 18, 15,
+};
+#endif
+
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
@@ -132,6 +145,12 @@ found:
     return 0;
   }
 
+  p->creation_time = ticks; // Use global ticks for creation time
+  p->nice = 0;              // Default nice value
+  p->vruntime = 0;          // Initial vruntime
+  p->run_time = 0;
+  p->sleep_time = 0;
+  p->runnable_time = 0;
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
@@ -385,12 +404,24 @@ kwait(uint64 addr)
         if(pp->state == ZOMBIE){
           // Found one.
           pid = pp->pid;
-          if(addr != 0 && copyout(p->pagetable, addr, (char *)&pp->xstate,
-                                  sizeof(pp->xstate)) < 0) {
-            release(&pp->lock);
-            release(&wait_lock);
-            return -1;
+          
+          // If the user provided a valid address, copy out the pstat struct.
+          if(addr != 0) {
+            // Create a pstat struct on the stack and fill it.
+            struct pstat ps;
+            ps.pid = pp->pid;
+            ps.run_time = pp->run_time;
+            ps.sleep_time = pp->sleep_time;
+            ps.runnable_time = pp->runnable_time;
+
+            // Copy the struct to the user-space address.
+            if(copyout(p->pagetable, addr, (char *)&ps, sizeof(ps)) < 0) {
+              release(&pp->lock);
+              release(&wait_lock);
+              return -1;
+            }
           }
+          
           freeproc(pp);
           release(&pp->lock);
           release(&wait_lock);
@@ -418,23 +449,114 @@ kwait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
+
+// Replace the entire scheduler() function with this one.
 void
 scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
-
+  
   c->proc = 0;
   for(;;){
-    // The most recent process to run may have had interrupts
-    // turned off; enable them to avoid a deadlock if all
-    // processes are waiting. Then turn them back off
-    // to avoid a possible race between an interrupt
-    // and wfi.
+    // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
-    intr_off();
 
-    int found = 0;
+#if defined(SCHEDULER_FCFS)
+    // FCFS SCHEDULER
+    struct proc *earliest_proc = 0;
+
+    // Find the runnable process with the earliest creation time
+    for(p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if(p->state == RUNNABLE) {
+        if (earliest_proc == 0 || p->creation_time < earliest_proc->creation_time) {
+          if (earliest_proc)
+            release(&earliest_proc->lock);
+          earliest_proc = p;
+          continue; // Keep the lock on the new earliest_proc
+        }
+      }
+      release(&p->lock);
+    }
+
+    if(earliest_proc) {
+      earliest_proc->state = RUNNING;
+      c->proc = earliest_proc;
+      swtch(&c->context, &earliest_proc->context);
+      // Process is done running for now.
+      c->proc = 0;
+      release(&earliest_proc->lock);
+    }
+
+#elif defined(SCHEDULER_CFS)
+    // COMPLETELY FAIR SCHEDULER (CFS) - CORRECTED VERSION
+    int num_runnable = 0;
+
+    // Count the number of runnable processes first.
+    for(p = proc; p < &proc[NPROC]; p++) {
+      if(p->state == RUNNABLE) {
+        num_runnable++;
+      }
+    }
+
+    // ONLY print the log if there is at least one process to schedule.
+    // This prevents the infinite loop of printing during boot.
+    if(num_runnable > 0){
+      // printf("[Scheduler Tick]\n");
+      for(p = proc; p < &proc[NPROC]; p++) {
+        if(p->state == RUNNABLE) {
+          // CORRECTED: vruntime is a uint64, so we must use %ld
+          printf("PID: %d | vRuntime: %ld\n", p->pid, p->vruntime);
+        }
+      }
+    }
+
+    // Now, find the process with the minimum vruntime to run.
+    struct proc *min_vruntime_proc = 0;
+    for(p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if(p->state == RUNNABLE) {
+        if (min_vruntime_proc == 0 || p->vruntime < min_vruntime_proc->vruntime) {
+          if (min_vruntime_proc)
+            release(&min_vruntime_proc->lock);
+          min_vruntime_proc = p;
+          continue; // Keep lock on the new minimum process
+        }
+      }
+      release(&p->lock);
+    }
+    
+    // If we found a process, run it.
+    if(min_vruntime_proc) {
+      printf("--> Scheduling PID %d (lowest vRuntime)\n\n", min_vruntime_proc->pid);
+      
+      // Calculate time slice
+      uint target_latency = 48;
+      uint min_slice = 3;
+      uint time_slice = 0;
+
+      if (num_runnable > 0) {
+        time_slice = target_latency / num_runnable;
+      }
+      
+      if (time_slice < min_slice) {
+        time_slice = min_slice;
+      }
+      
+      min_vruntime_proc->state = RUNNING;
+      c->proc = min_vruntime_proc;
+
+      swtch(&c->context, &min_vruntime_proc->context);
+
+      // Process is done running for now.
+      c->proc = 0;
+      release(&min_vruntime_proc->lock);
+    }
+ // This should be the end of the scheduler block in your file
+
+#else
+    // DEFAULT ROUND ROBIN SCHEDULER
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if(p->state == RUNNABLE) {
@@ -448,17 +570,12 @@ scheduler(void)
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
-        found = 1;
       }
       release(&p->lock);
     }
-    if(found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
-      asm volatile("wfi");
-    }
+#endif
   }
 }
-
 // Switch to scheduler.  Must hold only p->lock
 // and have changed proc->state. Saves and restores
 // intena because intena is a property of this
@@ -672,6 +789,18 @@ procdump(void)
   };
   struct proc *p;
   char *state;
+
+  printf("\npid\tstate\tname\tctime\tvruntime\truntime\n"); // Add new headers
+  for(p = proc; p < &proc[NPROC]; p++){
+    if(p->state == UNUSED)
+      continue;
+    if(p->state >= 0 && p->state < NELEM(states) && states[p->state])
+      state = states[p->state];
+    else
+      state = "???";
+    // Add new fields to the printf
+    printf("%d\t%s\t%s\t%ld\t%ld\t%ld", p->pid, state, p->name, p->creation_time, p->vruntime, p->run_time);
+    printf("\n");}
 
   printf("\n");
   for(p = proc; p < &proc[NPROC]; p++){

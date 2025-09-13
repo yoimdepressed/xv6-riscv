@@ -1,0 +1,49 @@
+#include "kernel/types.h"
+#include "user/user.h"
+#include "kernel/stat.h"
+#include "kernel/fcntl.h"
+#include <stdarg.h>
+
+// Atomic print function
+void atomic_printf(char *fmt, ...) {
+    char buf[256];
+    va_list ap;
+    va_start(ap, fmt);
+    vsprintf(buf, fmt, ap);
+    va_end(ap);
+    write(1, buf, strlen(buf));   // single write call
+}
+
+void work(int id, int iterations) {
+    atomic_printf("Process %d: starting work\n", id);
+    for (volatile int i = 0; i < iterations; i++) {
+        // CPU-intensive work (no printing here!)
+    }
+    atomic_printf("Process %d: completed\n", id);
+}
+
+int main() {
+    atomic_printf("=== FCFS Test ===\n");
+
+    for (int i = 0; i < 3; i++) {
+        if (fork() == 0) {
+            int pid = getpid();
+            atomic_printf("Child %d created (order %d)\n", pid, i + 1);
+            work(pid, 20000000 * (i + 1));
+            exit(0);
+        }
+    }
+
+    // parent does its own work
+    work(getpid(), 30000000);
+
+    // wait for children
+    for (int i = 0; i < 3; i++) {
+        wait(0);
+    }
+
+    atomic_printf("=== FCFS Test Completed ===\n");
+    atomic_printf("Expected: Processes complete in creation order\n");
+
+    exit(0);
+}
